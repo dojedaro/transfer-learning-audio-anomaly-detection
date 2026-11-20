@@ -85,6 +85,11 @@ pytest
   (autoencoders, one-class models), because labeled faults are rare. This project assumes a few
   labeled faults exist for the new machine.
 - **Small test set.** 60 clips per seed; the 10-seed spread is reported for that reason.
+- **One round of design changes after a smoke run.** A first 2-seed run (seeds 0 and 1, which are
+  also in the final 10) showed BatchNorm collapsing on 4-clip training sets and fine-tuning barely
+  moving the weights at a 1e-4 learning rate. Normalization became GroupNorm, the fine-tuning rate
+  3e-4 and the schedules a little longer; the settings were then frozen before the 10-seed run.
+  No other settings were tried.
 
 ## Earlier version
 
