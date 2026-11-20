@@ -23,8 +23,8 @@ sample standard deviation:
 | 0 (car/train model as is) | – | 50.0% ± 0.0 | – | – |
 | 4 | 60.2% ± 13.0 | 75.5% ± 21.3 | +15.3 (−6.1 to +36.8) | 6 / 4 |
 | 8 | 65.5% ± 15.2 | 74.5% ± 20.1 | +9.0 (−9.0 to +27.0) | 5 / 5 |
-| 16 | 73.7% ± 20.6 | 77.5% ± 19.3 | +3.8 (−14.2 to +21.9) | 5 / 4 |
-| 32 | 78.3% ± 21.8 | 91.0% ± 13.5 | +12.7 (−7.5 to +32.9) | 6 / 3 |
+| 16 | 73.7% ± 20.6 | 77.5% ± 19.3 | +3.8 (−14.2 to +21.9) | 5 / 4 (1 tie) |
+| 32 | 78.3% ± 21.8 | 91.0% ± 13.5 | +12.7 (−7.5 to +32.9) | 6 / 3 (1 tie) |
 
 The paired gain is fine-tuned minus from-scratch accuracy on the same seed and the same clips;
 the interval is a t-interval over the 10 seeds.
