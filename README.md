@@ -2,7 +2,7 @@
 
 **Does a CNN trained to hear faults in toy cars and trains transfer to a conveyor belt it has never heard? Not on its own: it scores 50%, a coin flip. Fine-tuned on a little conveyor data, it reaches 94%.**
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dojedaro/transfer-learning-audio-anomaly-detection/blob/main/Audio%20Data%2C%20ResNet%20and%20Transfer%20Learning.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dojedaro/transfer-learning-audio-anomaly-detection/blob/main/transfer_learning_anomaly_detection.ipynb)
 [![Notebook checks](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/notebooks.yml/badge.svg)](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/notebooks.yml)
 
 ## Results
@@ -44,13 +44,16 @@ The CNN has 4 convolutional blocks with batch normalization and max pooling, fol
 with dropout (about 19M trainable parameters). Transfer reuses all weights and continues training on
 the target machine at a 100x lower learning rate, so it adapts without forgetting what it learned.
 
+The random-split sanity check (first row of the results table) uses a different model: a frozen
+ImageNet VGG16 with a small dense head.
+
 ## Run it
 
 Runs on Google Colab with a GPU. The notebook generates its own data, so no download is needed.
 
 ```bash
 pip install -r requirements.txt
-jupyter notebook "Audio Data, ResNet and Transfer Learning.ipynb"
+jupyter notebook transfer_learning_anomaly_detection.ipynb
 ```
 
 Outside Colab, change the Google Drive paths at the top to a local folder.
