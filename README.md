@@ -1,74 +1,101 @@
-# Transfer Learning for Machine-Sound Anomaly Detection
+# Transfer Learning for Machine-Sound Fault Detection
 
-**Does a CNN trained to hear faults in toy cars and trains transfer to a conveyor belt it has never heard? Not on its own: it scores 50%, a coin flip. Fine-tuned on a little conveyor data, it reaches 94%.**
+**A fault detector trained on two machines is no better than a coin flip on a third, new machine (52%). Fine-tuning it on just 4 labeled clips of the new machine reaches 76%, against 54% for the same 4 clips trained from scratch. The gap narrows, and gets noisier, as more target data is available: 93% vs. 82% with 32 clips.**
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dojedaro/transfer-learning-audio-anomaly-detection/blob/main/transfer_learning_anomaly_detection.ipynb)
-[![Notebook checks](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/notebooks.yml/badge.svg)](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/notebooks.yml)
+[![CI](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/ci.yml)
+
+![Learning curve: fine-tuned vs. from scratch](results/learning_curve.png)
+
+## The question
+
+Commissioning a new machine is when a fault detector is weakest: there are many labeled recordings
+from the machines you already monitor and almost none from the new one. Does a model trained on
+the old machines help, and how much new-machine data does it save?
 
 ## Results
 
-Normal vs. anomalous machine sounds, as mel-spectrogram images. The headline experiment trains on
-ToyCar and ToyTrain and tests on ToyConveyor, a machine type the model never saw.
+Accuracy on **60 held-out conveyor clips that no model trains on**, mean ± std over 10 seeds
+(each seed regenerates the data, the splits and the training order):
 
-| Setup | Trained on | Tested on | Test clips | Accuracy | F1 |
-|---|---|---|---|---|---|
-| Random split (sanity check) | all machines | all machines | 123 | 1.000 | 1.000 |
-| No transfer | ToyCar + ToyTrain | ToyConveyor | 66 | 0.500 | **0.000** |
-| Transfer + fine-tuning | the model above, fine-tuned on ToyConveyor (lr 1e-5) | ToyConveyor | 66 | **0.939** | **0.943** |
+| Labeled conveyor clips | Trained from scratch | Fine-tuned from car/train model | Seeds where fine-tuning wins |
+|---|---|---|---|
+| 0 (car/train model as is) | – | 51.8% ± 4.4 | – |
+| 4 | 54.3% ± 10.4 | **76.0% ± 12.9** | 9 of 10 |
+| 8 | 68.2% ± 15.4 | **77.2% ± 13.3** | 6 of 10 (1 tie) |
+| 16 | 69.2% ± 18.4 | **74.8% ± 15.3** | 5 of 10 |
+| 32 | 81.8% ± 17.3 | **93.3% ± 6.5** | 5 of 10 (2 ties) |
 
-- **Without transfer the model collapsed.** 50% accuracy with an F1 of 0 means it predicted "normal"
-  for every conveyor clip. Training accuracy reached 100% while validation sat at exactly 50% for
-  every epoch: it memorized car and train sounds and learned nothing general about "anomalous".
-- **A small amount of target data fixes it.** Fine-tuning the same weights at a low learning rate
-  lifts conveyor accuracy from 0.50 to 0.94.
-- **The random split is too easy to mean much.** 100% when every machine is in both train and test
-  says the anomalies are separable, not that the model generalizes.
+On their own machines the source model scores 100% on held-out clips, so the 52% is not a weak
+model; it is domain shift.
 
-**About the data:** the audio is *synthetic*, generated to mimic the structure of the
-[ToyADMOS](https://github.com/YumaKoizumi/ToyADMOS-dataset) dataset (16 kHz, 10 s clips, anomalies
-injected as frequency distortions and noise). Real ToyADMOS recordings would be harder, and the test
-set is small (66 clips), so treat these as a clear demonstration of the effect, not a benchmark.
+- **The source model has the right idea in the wrong place.** It learned "short bursts against a
+  steady hum" at 2–3 kHz; the conveyor's faults are quieter bursts at 0.8–1.4 kHz, so it misses them.
+- **Transfer pays off most when data is scarcest.** With 4 clips, fine-tuning wins on 9 of 10 seeds
+  by 22 points on average. From 8 clips on, the average advantage is 6–12 points but individual
+  seeds go either way: with 60 test clips one seed's accuracy moves in 1.7-point steps, and small
+  training sets make both arms unstable.
+- **Fine-tuning is also more reliable:** at 32 clips its spread across seeds is 6.5 points against
+  17.3 for training from scratch.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    G[Generate synthetic<br/>machine audio] --> M[Mel-spectrogram<br/>images, 128 bins]
-    M --> S[Baseline CNN<br/>trained from scratch<br/>ToyCar + ToyTrain]
-    S --> T1[Test on ToyConveyor<br/>no transfer]
-    S --> F[Fine-tune on ToyConveyor<br/>learning rate 1e-5]
-    F --> T2[Test on ToyConveyor<br/>with transfer]
+    S[ToyCar + ToyTrain clips] --> M[Log-mel spectrograms<br/>64 bands]
+    M --> SRC[CNN trained on<br/>source machines]
+    C[ToyConveyor clips] --> P[Fine-tuning pool<br/>60 clips]
+    C --> T[Held-out test set<br/>60 clips, never trained on]
+    P -->|k = 4, 8, 16, 32| FT[Fine-tune the<br/>source CNN]
+    P -->|same k clips| SC[Train a new CNN<br/>from scratch]
+    SRC --> FT
+    SRC --> T
+    FT --> T
+    SC --> T
 ```
 
-The CNN has 4 convolutional blocks with batch normalization and max pooling, followed by dense layers
-with dropout (about 19M trainable parameters). Transfer reuses all weights and continues training on
-the target machine at a 100x lower learning rate, so it adapts without forgetting what it learned.
-
-The random-split sanity check (first row of the results table) uses a different model: a frozen
-ImageNet VGG16 with a small dense head.
+- **Data** ([`synth.py`](src/machine_audio/synth.py)): 4-second, 16 kHz clips of a machine hum
+  (fundamental plus harmonics, load drift, noise). Faulty clips add 50 ms impulsive bursts, the
+  usual signature of a chipped gear or a bearing defect. The conveyor hums at a different pitch, is
+  noisier, and its faults sit in a different frequency band at lower amplitude.
+- **Model** ([`model.py`](src/machine_audio/model.py)): three conv blocks with GroupNorm (the target
+  training sets are as small as 4 clips, where BatchNorm is unstable), global average pooling and
+  one logit.
+- **Protocol** ([`experiment.py`](src/machine_audio/experiment.py)): every arm uses the same
+  preprocessing (standardized with statistics from the source training clips only) and a fixed
+  training schedule. Nothing is tuned on the test set. Fine-tuning uses a 3x smaller learning rate
+  than training from scratch.
 
 ## Run it
 
-Runs on Google Colab with a GPU. The notebook generates its own data, so no download is needed.
+Runs on a laptop CPU in about 10 minutes for 10 seeds; no GPU or download needed.
 
 ```bash
-pip install -r requirements.txt
-jupyter notebook transfer_learning_anomaly_detection.ipynb
+pip install -e ".[dev]"
+python -m machine_audio.experiment --out results --seeds 10
+python -m machine_audio.plot --results results
+pytest
 ```
 
-Outside Colab, change the Google Drive paths at the top to a local folder.
+## Limitations
+
+- **The audio is synthetic.** Machine names follow the [ToyADMOS](https://github.com/YumaKoizumi/ToyADMOS-dataset)
+  dataset, but no ToyADMOS recordings are used, and the domain shift is designed, not measured.
+  The next step is the same protocol on real ToyADMOS or MIMII recordings, where faults are subtler.
+- **Supervised framing.** Real anomaly detection usually trains on normal sounds only
+  (autoencoders, one-class models), because labeled faults are rare. This project assumes a few
+  labeled faults exist for the new machine.
+- **Small test set.** 60 clips per seed; the 10-seed spread is reported for that reason.
+
+## Earlier version
+
+The first version of this repository (a Colab notebook) reported 50% → 94% for transfer. That 94%
+was not a held-out result: the model was fine-tuned on 54 of the 66 conveyor clips it was then
+scored on. This rebuild fixes that with a disjoint test set, adds the from-scratch control that the
+original lacked, and reports the spread over seeds. The original notebook is in the git history.
 
 ## Stack
 
-Python, librosa, NumPy, SciPy, TensorFlow/Keras, scikit-learn, Matplotlib.
-
-## Limitations and next steps
-
-- Repeat on the **real ToyADMOS** recordings, where anomalies are subtle.
-- Freeze the convolutional layers and fine-tune only the head, to measure how much target data
-  transfer really saves.
-- Anomaly detection is usually trained on normal sounds only (autoencoders, one-class models).
-  This project frames it as supervised classification, which assumes labeled anomalies exist.
+Python, PyTorch, librosa, NumPy, scikit-learn, Matplotlib; pytest and ruff in CI.
 
 ## License
 
