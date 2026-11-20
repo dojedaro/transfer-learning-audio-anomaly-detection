@@ -45,3 +45,25 @@ def test_model_outputs_one_logit_per_clip():
     features = log_mel(clips)
     x = Standardizer(features)(features)
     assert FaultCNN()(x).shape == torch.Size([4])
+
+
+def test_target_split_is_disjoint_and_stratified():
+    from machine_audio.experiment import split_target
+
+    y = np.array([0] * 60 + [1] * 60)
+    pool, test = split_target(y, np.random.default_rng(0))
+    assert not set(pool) & set(test)
+    assert len(pool) + len(test) == len(y)
+    assert (y[test] == 0).sum() == (y[test] == 1).sum() == 30
+
+
+def test_paired_gain_counts_wins_and_interval():
+    from machine_audio.experiment import paired_gain
+
+    runs = [
+        {"shots": {4: {"fine_tuned": {"accuracy": a}, "from_scratch": {"accuracy": b}}}}
+        for a, b in [(0.8, 0.6), (0.7, 0.7), (0.9, 0.5)]
+    ]
+    gain = paired_gain(runs, 4)
+    assert (gain["wins"], gain["ties"], gain["losses"]) == (2, 1, 0)
+    assert gain["ci95"][0] < gain["mean"] < gain["ci95"][1]

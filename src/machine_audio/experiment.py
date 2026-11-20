@@ -1,6 +1,6 @@
 """Does a fault detector trained on two machines help on a third, new machine?
 
-    python -m machine_audio.experiment --out results   # ~5 minutes on a laptop CPU
+    python -m machine_audio.experiment --out results   # ~10 minutes on a laptop CPU
 
 For each seed:
 
@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from scipy.stats import t
 from sklearn.metrics import accuracy_score, f1_score
 
 from machine_audio.model import FaultCNN, Standardizer, log_mel, predict, train
@@ -49,6 +50,17 @@ def _balanced_subset(y: np.ndarray, k: int, rng: np.random.Generator) -> np.ndar
     )
 
 
+def split_target(y: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Stratified half/half split into a fine-tuning pool and a test set (disjoint, each with
+    equal numbers of normal and faulty clips, so chance accuracy is exactly 50%)."""
+    pool, test = [], []
+    for label in (0, 1):
+        idx = rng.permutation(np.flatnonzero(y == label))
+        pool.append(idx[: len(idx) // 2])
+        test.append(idx[len(idx) // 2 :])
+    return np.concatenate(pool), np.concatenate(test)
+
+
 def run_seed(seed: int, per_class: int = 60) -> dict:
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -68,8 +80,7 @@ def run_seed(seed: int, per_class: int = 60) -> dict:
     # Target machine: half the clips form the fine-tuning pool, the other half the test set.
     target_clips, target_y = dataset(TARGET, per_class, seed=seed * 100 + 99)
     target_x = standardize(log_mel(target_clips))
-    order = rng.permutation(len(target_y))
-    pool, test = order[: len(order) // 2], order[len(order) // 2 :]
+    pool, test = split_target(target_y, rng)
     assert not set(pool) & set(test)
 
     x_source = standardize(source_x)
@@ -98,14 +109,37 @@ def run_seed(seed: int, per_class: int = 60) -> dict:
             "fine_tuned": _score(target_y[test], predict(tuned, target_x[test])),
         }
     result["target_test_clips"] = len(test)
+    result["seed"] = seed
     return result
 
 
+def paired_gain(runs: list[dict], k: int) -> dict[str, float]:
+    """Fine-tuned minus from-scratch accuracy on the same seed: mean, 95% t-interval, wins."""
+    diffs = np.array(
+        [
+            r["shots"][k]["fine_tuned"]["accuracy"] - r["shots"][k]["from_scratch"]["accuracy"]
+            for r in runs
+        ]
+    )
+    half = t.ppf(0.975, len(diffs) - 1) * diffs.std(ddof=1) / np.sqrt(len(diffs))
+    return {
+        "mean": round(float(diffs.mean()), 3),
+        "ci95": [round(float(diffs.mean() - half), 3), round(float(diffs.mean() + half), 3)],
+        "wins": int((diffs > 0).sum()),
+        "ties": int((diffs == 0).sum()),
+        "losses": int((diffs < 0).sum()),
+    }
+
+
 def summarize(runs: list[dict]) -> dict:
-    """Mean and standard deviation across seeds for every arm."""
+    """Mean and sample standard deviation (ddof=1) across seeds for every arm, plus the paired
+    fine-tuning gain per k."""
 
     def stats(values: list[float]) -> dict[str, float]:
-        return {"mean": round(float(np.mean(values)), 3), "std": round(float(np.std(values)), 3)}
+        return {
+            "mean": round(float(np.mean(values)), 3),
+            "std": round(float(np.std(values, ddof=1)), 3),
+        }
 
     summary = {
         arm: {m: stats([r[arm][m] for r in runs]) for m in ("accuracy", "f1")}
@@ -118,7 +152,9 @@ def summarize(runs: list[dict]) -> dict:
         }
         for k in SHOTS
     }
+    summary["fine_tuning_gain"] = {k: paired_gain(runs, k) for k in SHOTS}
     summary["seeds"] = len(runs)
+    summary["seed_ids"] = [r["seed"] for r in runs]
     summary["target_test_clips"] = runs[0]["target_test_clips"]
     return summary
 
@@ -126,10 +162,16 @@ def summarize(runs: list[dict]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", type=Path, default=Path("results"))
-    parser.add_argument("--seeds", type=int, default=5)
+    parser.add_argument("--seeds", type=int, default=10)
+    parser.add_argument(
+        "--first-seed",
+        type=int,
+        default=10,
+        help="seeds 0-9 were used while developing the protocol; 10+ are confirmatory",
+    )
     args = parser.parse_args()
     runs = []
-    for seed in range(args.seeds):
+    for seed in range(args.first_seed, args.first_seed + args.seeds):
         runs.append(run_seed(seed))
         print(f"seed {seed}: no transfer {runs[-1]['no_transfer']['accuracy']:.2f}", flush=True)
     summary = summarize(runs)

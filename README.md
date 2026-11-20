@@ -1,6 +1,6 @@
 # Transfer Learning for Machine-Sound Fault Detection
 
-**A fault detector trained on two machines is no better than a coin flip on a third, new machine (52%). Fine-tuning it on just 4 labeled clips of the new machine reaches 76%, against 54% for the same 4 clips trained from scratch. The gap narrows, and gets noisier, as more target data is available: 93% vs. 82% with 32 clips.**
+**A fault detector trained on two machines fails on a third, new machine: it flags every clip as faulty (50% accuracy). Does fine-tuning it on a handful of the new machine's clips beat training from scratch on those same clips? On average yes, at every amount of data tried (+4 to +15 points), but with 10 confirmatory seeds no single difference is statistically significant: on training sets this small, both approaches swing by ±13–22 points from seed to seed.** The repository is built to measure that honestly: a test set no model trains on, a from-scratch control, paired confidence intervals, and separate development and confirmatory seeds.
 
 [![CI](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/dojedaro/transfer-learning-audio-anomaly-detection/actions/workflows/ci.yml)
 
@@ -9,33 +9,34 @@
 ## The question
 
 Commissioning a new machine is when a fault detector is weakest: there are many labeled recordings
-from the machines you already monitor and almost none from the new one. Does a model trained on
-the old machines help, and how much new-machine data does it save?
+from the machines you already monitor and almost none from the new one. Does a model trained on the
+old machines help, and how much new-machine data does it save?
 
 ## Results
 
-Accuracy on **60 held-out conveyor clips that no model trains on**, mean ± std over 10 seeds
-(each seed regenerates the data, the splits and the training order):
+Confirmatory run (seeds 10–19; each seed regenerates the audio, the splits and the training order).
+Accuracy on **60 held-out conveyor clips (30 normal, 30 faulty) that no model trains on**, mean ±
+sample standard deviation:
 
-| Labeled conveyor clips | Trained from scratch | Fine-tuned from car/train model | Seeds where fine-tuning wins |
-|---|---|---|---|
-| 0 (car/train model as is) | – | 51.8% ± 4.4 | – |
-| 4 | 54.3% ± 10.4 | **76.0% ± 12.9** | 9 of 10 |
-| 8 | 68.2% ± 15.4 | **77.2% ± 13.3** | 6 of 10 (1 tie) |
-| 16 | 69.2% ± 18.4 | **74.8% ± 15.3** | 5 of 10 |
-| 32 | 81.8% ± 17.3 | **93.3% ± 6.5** | 5 of 10 (2 ties) |
+| Labeled conveyor clips | Trained from scratch | Fine-tuned from car/train model | Paired gain, 95% CI | Fine-tuning wins / loses |
+|---|---|---|---|---|
+| 0 (car/train model as is) | – | 50.0% ± 0.0 | – | – |
+| 4 | 60.2% ± 13.0 | 75.5% ± 21.3 | +15.3 (−6.1 to +36.8) | 6 / 4 |
+| 8 | 65.5% ± 15.2 | 74.5% ± 20.1 | +9.0 (−9.0 to +27.0) | 5 / 5 |
+| 16 | 73.7% ± 20.6 | 77.5% ± 19.3 | +3.8 (−14.2 to +21.9) | 5 / 4 |
+| 32 | 78.3% ± 21.8 | 91.0% ± 13.5 | +12.7 (−7.5 to +32.9) | 6 / 3 |
 
-On their own machines the source model scores 100% on held-out clips, so the 52% is not a weak
-model; it is domain shift.
+The paired gain is fine-tuned minus from-scratch accuracy on the same seed and the same clips;
+the interval is a t-interval over the 10 seeds.
 
-- **The source model has the right idea in the wrong place.** It learned "short bursts against a
-  steady hum" at 2–3 kHz; the conveyor's faults are quieter bursts at 0.8–1.4 kHz, so it misses them.
-- **Transfer pays off most when data is scarcest.** With 4 clips, fine-tuning wins on 9 of 10 seeds
-  by 22 points on average. From 8 clips on, the average advantage is 6–12 points but individual
-  seeds go either way: with 60 test clips one seed's accuracy moves in 1.7-point steps, and small
-  training sets make both arms unstable.
-- **Fine-tuning is also more reliable:** at 32 clips its spread across seeds is 6.5 points against
-  17.3 for training from scratch.
+- **Domain shift is real.** On held-out clips from its own machines the source model scores 100%;
+  on the conveyor it calls every clip faulty (F1 0.67, accuracy exactly 50%).
+- **Fine-tuning is ahead on average at every k, but not significantly.** Every interval includes
+  zero. The development run (seeds 0–9, below) showed a large, consistent gain with 4 clips (+22
+  points, 9 of 10 seeds); on fresh seeds the gain at 4 clips is smaller and wins only 6 of 10.
+- **The limiting factor is variance, not the method.** With 4 to 32 training clips, a single seed's
+  accuracy moves by 20 points depending on which clips were drawn. Showing a reliable difference
+  would need many more seeds or larger target sets.
 
 ## How it works
 
@@ -55,15 +56,30 @@ flowchart LR
 
 - **Data** ([`synth.py`](src/machine_audio/synth.py)): 4-second, 16 kHz clips of a machine hum
   (fundamental plus harmonics, load drift, noise). Faulty clips add 50 ms impulsive bursts, the
-  usual signature of a chipped gear or a bearing defect. The conveyor hums at a different pitch, is
-  noisier, and its faults sit in a different frequency band at lower amplitude.
+  usual signature of a chipped gear or a bearing defect. By design, the conveyor hums at a
+  different pitch, is noisier, and faults with quieter bursts in a different band (0.8–1.4 kHz
+  instead of 2–3 kHz).
 - **Model** ([`model.py`](src/machine_audio/model.py)): three conv blocks with GroupNorm (the target
   training sets are as small as 4 clips, where BatchNorm is unstable), global average pooling and
   one logit.
-- **Protocol** ([`experiment.py`](src/machine_audio/experiment.py)): every arm uses the same
+- **Protocol** ([`experiment.py`](src/machine_audio/experiment.py)): the conveyor clips are split,
+  stratified by label, into a fine-tuning pool and a disjoint test set; every arm uses the same
   preprocessing (standardized with statistics from the source training clips only) and a fixed
-  training schedule. Nothing is tuned on the test set. Fine-tuning uses a 3x smaller learning rate
-  than training from scratch.
+  training schedule; both arms see the same k clips. Nothing is tuned on the test set.
+
+## Development and confirmatory seeds
+
+Seeds 0–9 were used while building the protocol. A first 2-seed smoke run exposed BatchNorm
+collapsing on 4-clip training sets and fine-tuning barely moving the weights at a 1e-4 learning
+rate, so normalization became GroupNorm, the fine-tuning rate 3e-4 and the schedules longer. That
+choice was informed by seeing fine-tuning underperform, so the from-scratch arm was not given the
+same attention. The test split was also made stratified after review. The code was then frozen and
+run once on fresh seeds 10–19: those are the results above.
+
+The development run is kept in [`results/development/`](results/development/) for transparency:
+fine-tuning beat training from scratch by 22 points with 4 clips (9 of 10 seeds) and by 6–12 points
+with 8–32 clips. The confirmatory run shows a smaller and less consistent effect, which is the
+number to trust.
 
 ## Run it
 
@@ -71,7 +87,7 @@ Runs on a laptop CPU in about 10 minutes for 10 seeds; no GPU or download needed
 
 ```bash
 pip install -e ".[dev]"
-python -m machine_audio.experiment --out results --seeds 10
+python -m machine_audio.experiment --out results            # confirmatory seeds 10-19
 python -m machine_audio.plot --results results
 pytest
 ```
@@ -80,27 +96,23 @@ pytest
 
 - **The audio is synthetic.** Machine names follow the [ToyADMOS](https://github.com/YumaKoizumi/ToyADMOS-dataset)
   dataset, but no ToyADMOS recordings are used, and the domain shift is designed, not measured.
-  The next step is the same protocol on real ToyADMOS or MIMII recordings, where faults are subtler.
+  The next step is the same protocol on real ToyADMOS or MIMII recordings.
+- **Underpowered.** 10 seeds and 60 test clips per seed cannot resolve gains of 5–15 points against
+  this much seed-to-seed variance.
 - **Supervised framing.** Real anomaly detection usually trains on normal sounds only
   (autoencoders, one-class models), because labeled faults are rare. This project assumes a few
   labeled faults exist for the new machine.
-- **Small test set.** 60 clips per seed; the 10-seed spread is reported for that reason.
-- **One round of design changes after a smoke run.** A first 2-seed run (seeds 0 and 1, which are
-  also in the final 10) showed BatchNorm collapsing on 4-clip training sets and fine-tuning barely
-  moving the weights at a 1e-4 learning rate. Normalization became GroupNorm, the fine-tuning rate
-  3e-4 and the schedules a little longer; the settings were then frozen before the 10-seed run.
-  No other settings were tried.
 
 ## Earlier version
 
 The first version of this repository (a Colab notebook) reported 50% → 94% for transfer. That 94%
 was not a held-out result: the model was fine-tuned on 54 of the 66 conveyor clips it was then
-scored on. This rebuild fixes that with a disjoint test set, adds the from-scratch control that the
-original lacked, and reports the spread over seeds. The original notebook is in the git history.
+scored on, and there was no from-scratch control. This rebuild fixes both. The original notebook is
+in the git history.
 
 ## Stack
 
-Python, PyTorch, librosa, NumPy, scikit-learn, Matplotlib; pytest and ruff in CI.
+Python, PyTorch, librosa, NumPy, SciPy, scikit-learn, Matplotlib; pytest and ruff in CI.
 
 ## License
 
